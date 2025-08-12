@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Dashboard Vendas • Custos • Livelo • Frete</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+:root{--bg:#0f1222;--card:#171a2f;--ink:#f3f5ff;--muted:#9aa0b4;--accent:#6ee7b7;--danger:#f87171;--info:#60a5fa}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,Segoe UI,Roboto,Arial}
+.wrap{max-width:1260px;margin:auto;padding:24px}
+h1{font-size:40px;margin:0 0 14px}
+.muted{color:var(--muted);font-size:12px}
+.val{font-weight:700;font-size:22px;margin-top:4px}
+.grid{display:grid;gap:14px}
+.grid.cards{grid-template-columns:repeat(3,minmax(0,1fr))}
+.card{background:var(--card);border:1px solid #232742;border-radius:12px;padding:16px}
+.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.pill{background:#22274a;border:1px dashed #2e3566;border-radius:10px;padding:10px 14px}
+.btn{background:#334155;border:1px solid #475569;padding:10px 14px;border-radius:10px;color:#fff;cursor:pointer}
+.btn:hover{filter:brightness(1.1)}
+input{background:#0e1329;border:1px solid #2a3161;color:#fff;padding:10px 12px;border-radius:10px}
+.drop{border:2px dashed #3b426e;border-radius:16px;padding:22px;text-align:center;background:#0b0f21}
+.drop.drag{border-color:#60a5fa;background:#0a122b}
+.tabs{display:flex;gap:8px;margin:18px 0 8px;flex-wrap:wrap}
+.tab{padding:10px 14px;border-radius:10px;border:1px solid #2a3161;cursor:pointer;background:#0d1230;color:#cdd3ef}
+.tab.active{background:#192042;border-color:#3e4a8a}
+.hidden{display:none}
+table{width:100%;border-collapse:collapse}
+th,td{padding:9px;border-bottom:1px solid #262a4a}
+th{color:#cbd5e1;text-align:left;font-size:12px;letter-spacing:.02em}
+tr.group{background:#111633}
+.right{text-align:right}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid #3b426e;background:#121838;color:#aeb8d9}
+.badge.warn{border-color:#7c2d12;color:#fca5a5;background:#1a1320}
+.flex{display:flex;gap:8px;align-items:center}
+.mini{font-size:12px}
+/* Dashboard totals */
+.grid.totals{grid-template-columns:repeat(3,minmax(0,1fr))}
+.kpi .val{font-size:20px}
+/* Highlight strip for directors */
+.hirow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:18px}
+.hi{background:linear-gradient(180deg,#0f1a34,#0c1329);border:2px solid var(--accent);border-radius:14px;padding:18px;box-shadow:0 0 0 1px rgba(110,231,183,.15), 0 10px 30px rgba(0,0,0,.35)}
+.hi .label{font-size:13px;color:#a9f2d7;text-transform:uppercase;letter-spacing:.05em}
+.hi .value{font-weight:900;font-size:40px;line-height:1.05;margin-top:8px}
+@media (max-width:900px){
+  .grid.totals{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .hirow{grid-template-columns:1fr}
+  .hi .value{font-size:34px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Dashboard • Vendas, Custos, Livelo e Frete</h1>
+
+  <!-- Upload -->
+  <div id="dropzone" class="drop">
+    <div class="flex" style="justify-content:center">
+      <input id="fileInput" type="file" accept=".xlsx,.xls"/>
+      <span class="muted">ou arraste e solte sua planilha aqui (abas: <b>vtex</b> e <b>custo</b>)</span>
+    </div>
+    <div class="muted" style="margin-top:6px">Em <b>custo</b>: Coluna A = SKU (Reference Code), Coluna I = Custo. Soma fixa “INDUSTRIAIS”: <b>R$ 1,75</b>.</div>
+  </div>
+
+  <!-- Filtros -->
+  <div class="bar" style="margin-top:14px">
+    <div class="pill">
+      <label class="muted mini">Data inicial</label><br/>
+      <input type="date" id="dateStart"/>
+    </div>
+    <div class="pill">
+      <label class="muted mini">Data final</label><br/>
+      <input type="date" id="dateEnd"/>
+    </div>
+    <div class="pill">
+      <label class="muted mini">Pontos Livelo por R$</label><br/>
+      <input type="number" id="pointsPerReal" step="0.1" value="3"/>
+    </div>
+    <button id="apply" class="btn">Aplicar filtros</button>
+    <span id="ignoredInfo" class="badge warn" style="display:none"></span>
+  </div>
+
+  <!-- Abas -->
+  <div class="tabs">
+    <div class="tab active" data-tab="painel">Dashboard</div>
+    <div class="tab" data-tab="overview">Overview</div>
+    <div class="tab" data-tab="custosProduto">Custos de Produto</div>
+    <div class="tab" data-tab="livelo">Livelo</div>
+    <div class="tab" data-tab="frete">Frete</div>
+    <div class="tab" data-tab="kpis">KPIs</div>
+    <div class="tab" data-tab="config">Configurações</div>
+  </div>
+
+  <!-- Painel (totais apenas) -->
+  <section id="painel" class="">
+    <!-- Removemos o hero superior. Mantemos apenas KPIs menores e a faixa de destaques no fim. -->
+    <div class="grid totals" style="margin-top:14px">
+      <div class="card kpi">
+        <div class="muted">Pedidos Totais</div>
+        <div id="dlPedidos" class="val">0</div>
+      </div>
+      <div class="card kpi">
+        <div class="muted">Itens Totais</div>
+        <div id="dlItens" class="val">0</div>
+      </div>
+      <div class="card kpi">
+        <div class="muted">Ticket Médio</div>
+        <div id="dlTicket" class="val">R$ 0,00</div>
+      </div>
+      <div class="card kpi">
+        <div class="muted">Custo Total Frete</div>
+        <div id="dlFrete" class="val">R$ 0,00</div>
+      </div>
+      <div class="card kpi">
+        <div class="muted">Pontos Livelo (totais)</div>
+        <div id="dlPontos" class="val">0</div>
+      </div>
+      <div class="card kpi">
+        <div class="muted">Custo Total dos Pontos</div>
+        <div id="dlCustoPontos" class="val">R$ 0,00</div>
+      </div>
+    </div>
+
+    <!-- Destaques ao final do grid -->
+    <div class="hirow">
+      <div class="hi">
+        <div class="label">Vendas Totais</div>
+        <div id="hiVendas" class="value">R$ 0,00</div>
+      </div>
+      <div class="hi">
+        <div class="label">Custo Total</div>
+        <div id="hiCusto" class="value">R$ 0,00</div>
+      </div>
+      <div class="hi">
+        <div class="label">Lucro Líquido</div>
+        <div id="hiLucro" class="value">R$ 0,00</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Overview -->
+  <section id="overview" class="hidden">
+    <div class="grid cards">
+      <div class="card">
+        <div class="muted">Vendas</div>
+        <div id="ovVendas" class="val">R$ 0,00</div>
+      </div>
+      <div class="card">
+        <div class="muted">Lucro Pós-Livelo, Frete, Pagar.me e Alíquota</div>
+        <div id="ovLucroLiquido" class="val">R$ 0,00</div>
+      </div>
+      <div class="card">
+        <div class="muted">Lucro Bruto</div>
+        <div id="ovLucroBruto" class="val">R$ 0,00</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <div class="flex" style="justify-content:space-between">
+        <div class="muted">Resumo por Pedido (clique para ver SKUs)</div>
+        <div class="muted mini">Lucro Líquido = Vendas − Custo Produto − Custo Livelo − Frete − Pagar.me − Alíquota</div>
+      </div>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Pedido</th>
+              <th>Data</th>
+              <th class="right">Vendas</th>
+              <th class="right">Custo Produto</th>
+              <th class="right">Livelo</th>
+              <th class="right">Frete</th>
+              <th class="right">Pagar.me</th>
+              <th class="right">Alíquota</th>
+              <th class="right">Lucro Líquido</th>
+              <th class="right">Ignorados</th>
+            </tr>
+          </thead>
+          <tbody id="ovBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Custos de Produto -->
+  <section id="custosProduto" class="hidden">
+    <div class="grid cards">
+      <div class="card">
+        <div class="muted">Custo Produto (I + 1,75)</div>
+        <div id="cpTotal" class="val">R$ 0,00</div>
+      </div>
+      <div class="card">
+        <div class="muted">Vendas</div>
+        <div id="cpVendas" class="val">R$ 0,00</div>
+      </div>
+      <div class="card">
+        <div class="muted">Lucro (s/ Livelo, Frete, Pagar.me e Alíquota)</div>
+        <div id="cpLucroBruto" class="val">R$ 0,00</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <div class="muted">Por Pedido • clique para detalhar SKUs</div>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Pedido</th>
+              <th>Data</th>
+              <th class="right">Custo Produto</th>
+              <th class="right">Vendas</th>
+              <th class="right">Lucro (bruto)</th>
+            </tr>
+          </thead>
+          <tbody id="cpBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Livelo -->
+  <section id="livelo" class="hidden">
+    <div class="grid cards">
+      <div class="card">
+        <div class="muted">Pontos totais</div>
+        <div id="lvPontos" class="val">0</div>
+      </div>
+      <div class="card">
+        <div class="muted">Custo Livelo (R$ 0,0449)</div>
+        <div id="lvCusto" class="val">R$ 0,00</div>
+      </div>
+      <div class="card">
+        <div class="muted">Impacto no Lucro</div>
+        <div id="lvImpacto" class="val">R$ 0,00</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <div class="muted">Por Pedido</div>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Pedido</th>
+              <th>Data</th>
+              <th class="right">Vendas</th>
+              <th class="right">Pontos</th>
+              <th class="right">Custo Livelo</th>
+            </tr>
+          </thead>
+          <tbody id="lvBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Frete -->
+  <section id="frete" class="hidden">
+    <div class="grid cards">
+      <div class="card">
+        <div class="muted">Custo Total de Frete</div>
+        <div id="frTotal" class="val">R$ 0,00</div>
+      </div>
+      <div class="card">
+        <div class="muted">Pedidos com Shipping Value = 0</div>
+        <div id="frZero" class="val">0</div>
+      </div>
+      <div class="card">
+        <div class="muted">Média Frete por Pedido</div>
+        <div id="frMedia" class="val">R$ 0,00</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <div class="muted">Por Pedido</div>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Pedido</th>
+              <th>Data</th>
+              <th class="right">Shipping Value</th>
+              <th class="right">SKU List Pricing (somado S/ Qtd)</th>
+              <th class="right">Frete Considerado</th>
+              <th class="right">Critério</th>
+            </tr>
+          </thead>
+          <tbody id="frBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- KPIs -->
+  <section id="kpis" class="hidden">
+    <div class="grid cards">
+      <div class="card">
+        <div class="muted">Ticket Médio</div>
+        <div id="kpiTicket" class="val">R$ 0,00</div>
+      </div>
+      <div class="card">
+        <div class="muted">Qtd. Pedidos</div>
+        <div id="kpiPedidos" class="val">0</div>
+      </div>
+      <div class="card">
+        <div class="muted">Qtd. SKUs Vendidos</div>
+        <div id="kpiSkus" class="val">0</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Configurações -->
+  <section id="config" class="hidden">
+    <div class="grid cards">
+      <div class="card">
+        <div class="muted mini">Taxa da Pagar.me (%)</div>
+        <input type="number" id="pagarmeRate" step="0.01" min="0" value="0" style="margin-top:6px;width:160px"/>
+        <div class="muted mini" style="margin-top:6px">Incidência sobre <b>Vendas</b> do pedido.</div>
+      </div>
+      <div class="card">
+        <div class="muted mini">Alíquota (%)</div>
+        <input type="number" id="aliquotaRate" step="0.01" min="0" value="0" style="margin-top:6px;width:160px"/>
+        <div class="muted mini" style="margin-top:6px">Incidência sobre <b>Vendas</b> do pedido.</div>
+      </div>
+      <div class="card">
+        <div class="muted">Totais no período filtrado</div>
+        <div class="muted mini" style="margin-top:8px">Pagar.me</div>
+        <div id="cfgPagarmeTot" class="val">R$ 0,00</div>
+        <div class="muted mini" style="margin-top:8px">Alíquota</div>
+        <div id="cfgAliquotaTot" class="val">R$ 0,00</div>
+        <button id="saveCfg" class="btn" style="margin-top:10px">Salvar e Recalcular</button>
+        <div class="muted mini" style="margin-top:6px">As configurações ficam salvas neste navegador.</div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+/* ===== Helpers ===== */
+const BRL = v => (isNaN(v)||v==null) ? 'R$ 0,00' : v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const fmtDate = d => d ? new Date(d).toISOString().slice(0,10) : '';
+const toNumber = x => { if(x===null||x===undefined||x==='') return null; const n=Number(String(x).replace(',','.')); return isNaN(n)?null:n; };
+const parseDate = d => { const t=new Date(d); return isNaN(t)?null:t; };
+
+let rowsVTEX=[], costMap=new Map(), dateMin=null, dateMax=null;
+
+/* ===== Persistência simples ===== */
+function loadConfig(){
+  const a = Number(localStorage.getItem('aliquotaRate')||'0');
+  const p = Number(localStorage.getItem('pagarmeRate')||'0');
+  document.getElementById('aliquotaRate').value = a;
+  document.getElementById('pagarmeRate').value = p;
+}
+function saveConfig(){
+  const a = Number(document.getElementById('aliquotaRate').value)||0;
+  const p = Number(document.getElementById('pagarmeRate').value)||0;
+  localStorage.setItem('aliquotaRate', a);
+  localStorage.setItem('pagarmeRate', p);
+}
+
+/* ===== Drag & Drop ===== */
+const drop = document.getElementById('dropzone');
+['dragenter','dragover'].forEach(evt=>drop.addEventListener(evt,e=>{e.preventDefault();drop.classList.add('drag');}));
+['dragleave','drop'].forEach(evt=>drop.addEventListener(evt,e=>{e.preventDefault();drop.classList.remove('drag');}));
+drop.addEventListener('drop', e=>{ const f=e.dataTransfer.files?.[0]; if(f) loadWorkbook(f); });
+
+document.getElementById('fileInput').addEventListener('change', e=>{
+  const f = e.target.files?.[0];
+  if(f) loadWorkbook(f);
+});
+
+/* ===== XLSX ===== */
+async function loadWorkbook(file){
+  const data = await file.arrayBuffer();
+  const wb = XLSX.read(data,{type:'array',cellDates:true,cellNF:false,cellText:false});
+
+  const vtexName = wb.SheetNames.find(n=>n.toLowerCase()==='vtex') || wb.SheetNames[0];
+  const custoName = wb.SheetNames.find(n=>n.toLowerCase()==='custo');
+  if(!vtexName || !custoName){ alert('Preciso das abas "vtex" e "custo".'); return; }
+
+  // VTEX com cabeçalho
+  const vtex = XLSX.utils.sheet_to_json(wb.Sheets[vtexName], {defval:null});
+
+  // CUSTO via header:1 para capturar colunas por índice
+  const cm = XLSX.utils.sheet_to_json(wb.Sheets[custoName], {header:1, defval:null});
+  costMap.clear();
+  for(let r=3;r<cm.length;r++){
+    const row = cm[r];
+    const sku = toNumber(row?.[0]);   // Col A
+    const cI  = toNumber(row?.[8]);   // Col I
+    if(sku!=null && cI!=null) costMap.set(sku, cI + 1.75); // + INDUSTRIAIS
+  }
+
+  // Normalização VTEX
+  rowsVTEX = vtex.map(o=>{
+    const order   = o['Order'] ?? o['order'] ?? o['Pedido'];
+    const created = o['Creation Date'] ?? o['CreationDate'] ?? o['creation date'];
+    const idSKU   = o['Reference Code'] ?? o['ID_SKU'] ?? o['SkuId'] ?? o['SKU'] ?? o['sku'];
+    const qty     = toNumber(o['Quantity_SKU'] ?? o['Quantidade'] ?? o['quantity'] ?? o['Qty']);
+    const price   = toNumber(o['SKU Selling Price'] ?? o['Preco SKU'] ?? o['SellingPrice']);
+    const skuShip = toNumber(o['SKU List Pricing'] ?? o['SKU List Price'] ?? o['Shipping List Price']);
+    const shipVal = toNumber(o['Shipping Value'] ?? o['shipping value'] ?? o['Valor Frete']);
+    const name    = o['SKU Name'] ?? o['SkuName'] ?? o['Nome SKU'];
+    const dt      = parseDate(created);
+    return {order:String(order??'').trim(), date:dt, sku:toNumber(idSKU), name, qty:qty??0, price:price??0, skuShip:skuShip??0, shippingValue:shipVal??null};
+  }).filter(r=>r.order && r.date && r.sku!=null);
+
+  // datas
+  const times = rowsVTEX.map(r=>r.date.getTime());
+  dateMin = new Date(Math.min(...times)); dateMax = new Date(Math.max(...times));
+  document.getElementById('dateStart').value = fmtDate(dateMin);
+  document.getElementById('dateEnd').value   = fmtDate(dateMax);
+
+  applyFilters();
+}
+
+/* ===== Cálculos ===== */
+function compute(ini, fim, pointsPerReal){
+  const start = new Date(ini); start.setHours(0,0,0,0);
+  const end   = new Date(fim); end.setHours(23,59,59,999);
+  const LIV_POINT_VALUE = 0.0449;
+
+  const aliquotaPct = (Number(document.getElementById('aliquotaRate').value)||0) / 100;
+  const pagarmePct  = (Number(document.getElementById('pagarmeRate').value)||0) / 100;
+
+  const lines = rowsVTEX.filter(r=>r.date>=start && r.date<=end);
+  const orders = new Map();
+  let ignoredLines=0, skuSum=0;
+
+  // agrupa
+  for(const it of lines){
+    skuSum += it.qty||0;
+    const costUnit = costMap.get(it.sku);
+    if(!orders.has(it.order)){
+      orders.set(it.order,{
+        order:it.order, date:it.date, revenue:0, costProd:0,
+        points:0, liveloCost:0, freight:0, shippingValue:null, skuShipSum:0,
+        pagarme:0, aliquota:0, profitBruto:0, profitLiquido:0,
+        items:[], ignored:0, freightBreakdown:[]
+      });
+    }
+    const o = orders.get(it.order);
+
+    // vendas
+    const revenue = (it.price||0) * (it.qty||0);
+    o.revenue += revenue;
+
+    // frete
+    if(it.shippingValue!=null){ o.shippingValue = it.shippingValue; }
+    o.skuShipSum += (it.skuShip||0);
+    o.freightBreakdown.push({ sku: it.sku, name: it.name||'', qty: it.qty||0, skuListPrice: it.skuShip||0 });
+
+    // custo produto
+    if(costUnit==null){
+      ignoredLines++; o.ignored++;
+    }else{
+      const cTot = costUnit * (it.qty||0);
+      o.costProd += cTot;
+      o.items.push({
+        sku:it.sku,name:it.name||'',qty:it.qty||0,unitPrice:it.price||0,
+        revenue, costUnit, costTot:cTot, profit:revenue - cTot
+      });
+    }
+  }
+
+  // Pós loop: define frete e custos percentuais
+  for(const o of orders.values()){
+    const shippingValue = Number.isFinite(o.shippingValue) ? o.shippingValue : null;
+    if(shippingValue!=null && shippingValue>0){
+      o.freight = shippingValue;
+      o.freightCrit = 'Shipping Value';
+    }else{
+      o.freight = o.skuShipSum;
+      o.freightCrit = 'SKU List Pricing (somado S/ Qtd)';
+    }
+
+    // custos percentuais sobre vendas
+    o.pagarme = o.revenue * pagarmePct;
+    o.aliquota = o.revenue * aliquotaPct;
+
+    o.points     = (pointsPerReal||0) * o.revenue;
+    o.liveloCost = o.points * LIV_POINT_VALUE;
+    o.profitBruto  = o.revenue - o.costProd;
+    o.profitLiquido = o.revenue - o.costProd - o.liveloCost - o.freight - o.pagarme - o.aliquota;
+  }
+
+  // totais/KPIs
+  const arr = [...orders.values()];
+  const totals = arr.reduce((a,o)=>{
+    a.revenue+=o.revenue; a.costProd+=o.costProd; a.points+=o.points; a.liveloCost+=o.liveloCost;
+    a.freight+=o.freight; a.pagarme+=o.pagarme; a.aliquota+=o.aliquota;
+    a.profitBruto+=o.profitBruto; a.profitLiquido+=o.profitLiquido; a.ignored+=o.ignored;
+    return a;
+  },{revenue:0,costProd:0,points:0,liveloCost:0,freight:0,pagarme:0,aliquota:0,profitBruto:0,profitLiquido:0,ignored:0});
+
+  const uniqueOrders = arr.length;
+  const ticketMedio = uniqueOrders ? (totals.revenue/uniqueOrders) : 0;
+
+  const kpis = { ticketMedio, pedidos: uniqueOrders, skusVendidos: skuSum };
+  return {orders: arr.sort((a,b)=>a.date-b.date), totals, kpis};
+}
+
+/* ===== Render ===== */
+function renderAll({orders, totals, kpis}){
+  // aviso ignorados
+  const ignoredTag = document.getElementById('ignoredInfo');
+  if(totals.ignored>0){ ignoredTag.style.display=''; ignoredTag.textContent=`${totals.ignored} itens sem custo (ignorados)`; }
+  else { ignoredTag.style.display='none'; }
+
+  /* Painel (totais) */
+  const custoTotalGeral = totals.costProd + totals.liveloCost + totals.freight + totals.pagarme + totals.aliquota;
+  document.getElementById('dlPedidos').textContent     = (kpis.pedidos||0).toLocaleString('pt-BR');
+  document.getElementById('dlItens').textContent       = (kpis.skusVendidos||0).toLocaleString('pt-BR');
+  document.getElementById('dlTicket').textContent      = BRL(kpis.ticketMedio);
+  document.getElementById('dlFrete').textContent       = BRL(totals.freight);
+  document.getElementById('dlPontos').textContent      = Math.round(totals.points).toLocaleString('pt-BR');
+  document.getElementById('dlCustoPontos').textContent = BRL(totals.liveloCost);
+
+  // Highlights (embaixo)
+  document.getElementById('hiVendas').textContent = BRL(totals.revenue);
+  document.getElementById('hiCusto').textContent  = BRL(custoTotalGeral);
+  document.getElementById('hiLucro').textContent  = BRL(totals.profitLiquido);
+
+  /* Overview cards */
+  document.getElementById('ovVendas').textContent = BRL(totals.revenue);
+  document.getElementById('ovLucroLiquido').textContent = BRL(totals.profitLiquido);
+  document.getElementById('ovLucroBruto').textContent = BRL(totals.profitBruto);
+
+  /* Overview table */
+  const ovBody = document.getElementById('ovBody'); ovBody.innerHTML='';
+  orders.forEach(o=>{
+    const tr = document.createElement('tr'); tr.className='group';
+    tr.innerHTML = `
+      <td>${o.order}</td>
+      <td>${fmtDate(o.date)}</td>
+      <td class="right">${BRL(o.revenue)}</td>
+      <td class="right">${BRL(o.costProd)}</td>
+      <td class="right">${BRL(o.liveloCost)}</td>
+      <td class="right">${BRL(o.freight)}</td>
+      <td class="right">${BRL(o.pagarme)}</td>
+      <td class="right">${BRL(o.aliquota)}</td>
+      <td class="right">${BRL(o.profitLiquido)}</td>
+      <td class="right">${o.ignored||0}</td>
+    `;
+    ovBody.appendChild(tr);
+
+    const det = document.createElement('tr');
+    const td = document.createElement('td'); td.colSpan=10; td.style.padding='0';
+    det.appendChild(td); det.style.display='none';
+
+    const inner = document.createElement('div'); inner.style.padding='8px 12px';
+    inner.innerHTML = `
+      <div class="muted mini" style="margin:4px 0 8px">Itens do pedido</div>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>SKU</th><th>Nome</th>
+              <th class="right">Qtd</th>
+              <th class="right">Preço Unit.</th>
+              <th class="right">Total</th>
+              <th class="right">Custo Unit. (I + 1,75)</th>
+              <th class="right">Custo</th>
+              <th class="right">Lucro (linha)</th>
+            </tr>
+          </thead>
+          <tbody>
+          ${o.items.map(it=>`
+            <tr>
+              <td>${it.sku}</td>
+              <td>${it.name||''}</td>
+              <td class="right">${it.qty}</td>
+              <td class="right">${BRL(it.unitPrice)}</td>
+              <td class="right">${BRL(it.revenue)}</td>
+              <td class="right">${BRL(it.costUnit)}</td>
+              <td class="right">${BRL(it.costTot)}</td>
+              <td class="right">${BRL(it.revenue - it.costTot)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="muted mini" style="margin:8px 0">Detalhe do frete (fallback quando Shipping Value = 0): soma de SKU List Pricing sem multiplicar pela quantidade.</div>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>SKU</th>
+              <th>Nome</th>
+              <th class="right">Qtd</th>
+              <th class="right">SKU List Price</th>
+            </tr>
+          </thead>
+          <tbody>
+          ${o.freightBreakdown.map(it=>`
+            <tr>
+              <td>${it.sku}</td>
+              <td>${it.name}</td>
+              <td class="right">${it.qty}</td>
+              <td class="right">${BRL(it.skuListPrice)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+    td.appendChild(inner); ovBody.appendChild(det);
+    tr.addEventListener('click', ()=>{ det.style.display = (det.style.display==='none')?'':'none'; });
+  });
+
+  /* Custos Produto */
+  document.getElementById('cpTotal').textContent = BRL(totals.costProd);
+  document.getElementById('cpVendas').textContent = BRL(totals.revenue);
+  document.getElementById('cpLucroBruto').textContent = BRL(totals.profitBruto);
+  const cpBody = document.getElementById('cpBody'); cpBody.innerHTML='';
+  orders.forEach(o=>{
+    const tr=document.createElement('tr'); tr.className='group';
+    tr.innerHTML = `
+      <td>${o.order}</td>
+      <td>${fmtDate(o.date)}</td>
+      <td class="right">${BRL(o.costProd)}</td>
+      <td class="right">${BRL(o.revenue)}</td>
+      <td class="right">${BRL(o.profitBruto)}</td>
+    `;
+    cpBody.appendChild(tr);
+  });
+
+  /* Livelo */
+  document.getElementById('lvPontos').textContent = Math.round(totals.points).toLocaleString('pt-BR');
+  document.getElementById('lvCusto').textContent  = BRL(totals.liveloCost);
+  document.getElementById('lvImpacto').textContent = BRL(-totals.liveloCost);
+  const lvBody = document.getElementById('lvBody'); lvBody.innerHTML='';
+  orders.forEach(o=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML = `
+      <td>${o.order}</td>
+      <td>${fmtDate(o.date)}</td>
+      <td class="right">${BRL(o.revenue)}</td>
+      <td class="right">${Math.round(o.points).toLocaleString('pt-BR')}</td>
+      <td class="right">${BRL(o.liveloCost)}</td>
+    `;
+    lvBody.appendChild(tr);
+  });
+
+  /* Frete */
+  const frBody = document.getElementById('frBody'); frBody.innerHTML='';
+  orders.forEach(o=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML = `
+      <td>${o.order}</td>
+      <td>${fmtDate(o.date)}</td>
+      <td class="right">${BRL(o.shippingValue??0)}</td>
+      <td class="right">${BRL(o.skuShipSum)}</td>
+      <td class="right">${BRL(o.freight)}</td>
+      <td class="right">${o.freightCrit}</td>
+    `;
+    frBody.appendChild(tr);
+  });
+  const pedidosCount = orders.length || 1;
+  document.getElementById('frTotal').textContent = BRL(totals.freight);
+  document.getElementById('frZero').textContent  = orders.filter(o=>(!o.shippingValue || o.shippingValue<=0)).length;
+  document.getElementById('frMedia').textContent = BRL(totals.freight / pedidosCount);
+
+  /* KPIs */
+  document.getElementById('kpiTicket').textContent  = BRL(kpis.ticketMedio);
+  document.getElementById('kpiPedidos').textContent = kpis.pedidos.toLocaleString('pt-BR');
+  document.getElementById('kpiSkus').textContent    = kpis.skusVendidos.toLocaleString('pt-BR');
+
+  /* Config Totais */
+  document.getElementById('cfgPagarmeTot').textContent = BRL(totals.pagarme);
+  document.getElementById('cfgAliquotaTot').textContent = BRL(totals.aliquota);
+}
+
+/* ===== Tabs ===== */
+document.querySelectorAll('.tab').forEach(el=>{
+  el.addEventListener('click',()=>{
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('section').forEach(s=>s.classList.add('hidden'));
+    el.classList.add('active');
+    document.getElementById(el.dataset.tab).classList.remove('hidden');
+  });
+});
+
+/* ===== Apply ===== */
+function applyFilters(){
+  const ini = document.getElementById('dateStart').value;
+  const fim = document.getElementById('dateEnd').value;
+  const ppr = Number(document.getElementById('pointsPerReal').value) || 0;
+  const data = compute(ini, fim, ppr);
+  renderAll(data);
+}
+
+/* ===== Boot ===== */
+document.getElementById('apply').addEventListener('click', applyFilters);
+document.getElementById('saveCfg').addEventListener('click', ()=>{ saveConfig(); applyFilters(); });
+loadConfig();
+</script>
+</body>
+</html>
